@@ -1,0 +1,367 @@
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+import { getFirestore, doc, getDoc, setDoc } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+
+// Credenciais do seu projeto prodcardnet
+const firebaseConfig = {
+  apiKey: "SUA_API_KEY", // Obtenha nas configurações do seu projeto no console
+  authDomain: "prodcardnet.firebaseapp.com",
+  projectId: "prodcardnet",
+  storageBucket: "prodcardnet.appspot.com",
+  messagingSenderId: "1021411614783",
+  appId: "SEU_APP_ID" // Obtenha nas configurações do seu projeto no console
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+
+// MANTENHA AQUI A SUA CONSTANTE 'CLIENTES_PADRAO' ORIGINAL INTEGRALMENTE
+
+let abaAtiva = 'producao';
+let bancoDados = {};
+
+const mesesNomes = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
+
+// Salva os dados do mês atual de forma assíncrona no Firestore
+async function salvarDados(chave) {
+  if (chave && bancoDados[chave]) {
+    await setDoc(doc(db, "mensal", chave), bancoDados[chave]);
+  }
+}
+
+function getDiasNoMes(mes, ano) {
+  return new Date(ano, mes, 0).getDate();
+}
+
+// Obtém os dados do mês de forma assíncrona do Firestore
+async function obterDadosMesAtual() {
+  const mesEl = document.getElementById('mes');
+  const anoEl = document.getElementById('ano');
+
+  if (!mesEl || !anoEl) return null;
+
+  const mes = mesEl.value;
+  const ano = anoEl.value;
+  const chave = `${ano}_${mes}`;
+
+  if (!bancoDados[chave]) {
+    const docRef = doc(db, "mensal", chave);
+    const docSnap = await getDoc(docRef);
+
+    if (docSnap.exists()) {
+      bancoDados[chave] = docSnap.data();
+    } else {
+      const prodPadrao = typeof CLIENTES_PADRAO !== 'undefined' && CLIENTES_PADRAO.producao ? CLIENTES_PADRAO.producao : [];
+      const chipPadrao = typeof CLIENTES_PADRAO !== 'undefined' && CLIENTES_PADRAO.chip ? CLIENTES_PADRAO.chip : [];
+
+      bancoDados[chave] = {
+        producao: prodPadrao.map(nome => ({ nome, dias: new Array(31).fill(null) })),
+        chip: chipPadrao.map(nome => ({ nome, dias: new Array(31).fill(null) }))
+      };
+      await salvarDados(chave);
+    }
+  }
+
+  if (bancoDados[chave].producao) bancoDados[chave].producao.sort((a, b) => a.nome.localeCompare(b.nome));
+  if (bancoDados[chave].chip) bancoDados[chave].chip.sort((a, b) => a.nome.localeCompare(b.nome));
+
+  return bancoDados[chave];
+}
+
+async function mudarAba(aba) {
+  abaAtiva = aba;
+  const tabProd = document.getElementById('tabProducao');
+  const tabChip = document.getElementById('tabChip');
+  
+  if (tabProd) tabProd.classList.toggle('active', aba === 'producao');
+  if (tabChip) tabChip.classList.toggle('active', aba === 'chip');
+  await render();
+}
+
+async function render() {
+  const mesEl = document.getElementById('mes');
+  const anoEl = document.getElementById('ano');
+  const buscaEl = document.getElementById('busca');
+  const tabela = document.getElementById('tabela');
+
+  if (!mesEl || !anoEl || !tabela) return;
+
+  const mes = parseInt(mesEl.value);
+  const ano = parseInt(anoEl.value);
+  const busca = buscaEl ? buscaEl.value.toLowerCase() : '';
+  const totalDias = getDiasNoMes(mes, ano);
+  
+  const tituloEl = document.getElementById('tituloTabela');
+  if (tituloEl) tituloEl.innerText = `Produção — ${mesesNomes[mes - 1]}/${ano}`;
+  
+  const dadosMes = await obterDadosMesAtual();
+  if (!dadosMes || !dadosMes[abaAtiva]) return;
+
+  const lista = dadosMes[abaAtiva].filter(item => item.nome.toLowerCase().includes(busca));
+  
+  let html = '<thead><tr><th class="name">Cliente / Produto</th>';
+  
+  for (let d = 1; d <= totalDias; d++) {
+    const dataObj = new Date(ano, mes - 1, d);
+    const eFimDeSemana = dataObj.getDay() === 0 || dataObj.getDay() === 6;
+    html += `<th class="${eFimDeSemana ? 'weekend' : ''}">${d}</th>`;
+  }
+  html += '<th class="sum">TOTAL</th><th class="avg">MÉDIA</th></tr></thead><tbody>';
+  
+  let somaGeral = 0;
+  let totalLancamentos = 0;
+  let clientesComProd = 0;
+  let diasComProdSet = new Set();
+  let totDia = new Array(totalDias).fill(0);
+
+  lista.forEach((item, index) => {
+    let somaCliente = 0;
+    let lancamentosCliente = 0;
+    
+    html += `<tr><td class="name">${item.nome}</td>`;
+    
+    for (let d = 0; d < totalDias; d++) {
+      const val = item.dias[d];
+      const dataObj = new Date(ano, mes - 1, d + 1);
+      const eFimDeSemana = dataObj.getDay() === 0 || dataObj.getDay() === 6;
+      
+      if (val !== null && val !== undefined && val !== '') {
+        const nVal = parseFloat(val);
+        somaCliente += nVal;
+        totDia[d] += nVal;
+        somaGeral += nVal;
+        lancamentosCliente++;
+        totalLancamentos++;
+        diasComProdSet.add(d);
+      }
+      
+      html += `<td class="${eFimDeSemana ? 'weekend' : ''}">
+        <input class="day-input" type="number" step="any" value="${val !== null && val !== undefined ? val : ''}" 
+        onchange="window.atualizarValor(${index}, ${d}, this.value)">
+      </td>`;
+    }
+    
+    if (somaCliente > 0) clientesComProd++;
+    const mediaCliente = lancamentosCliente > 0 ? (somaCliente / lancamentosCliente).toFixed(1) : 0;
+    
+    html += `<td class="sum">${somaCliente.toLocaleString('pt-BR')}</td>`;
+    html += `<td class="avg">${mediaCliente}</td></tr>`;
+  });
+
+  html += '<tr class="total-row"><td class="name">TOTAL DIÁRIO</td>';
+  for (let d = 0; d < totalDias; d++) {
+    html += `<td>${totDia[d] > 0 ? totDia[d].toLocaleString('pt-BR') : '-'}</td>`;
+  }
+  const mediaGeral = totalLancamentos > 0 ? (somaGeral / totalLancamentos).toFixed(1) : 0;
+  html += `<td class="sum">${somaGeral.toLocaleString('pt-BR')}</td><td class="avg">${mediaGeral}</td></tr>`;
+  
+  html += '</tbody>';
+  tabela.innerHTML = html;
+
+  const totalMesEl = document.getElementById('totalMes');
+  const mediaMesEl = document.getElementById('mediaMes');
+  const qtdClientesEl = document.getElementById('qtdClientes');
+  const diasComProdEl = document.getElementById('diasComProd');
+
+  if (totalMesEl) totalMesEl.innerText = somaGeral.toLocaleString('pt-BR');
+  if (mediaMesEl) mediaMesEl.innerText = mediaGeral;
+  if (qtdClientesEl) qtdClientesEl.innerText = lista.length;
+  if (diasComProdEl) diasComProdEl.innerText = diasComProdSet.size;
+}
+
+async function atualizarValor(clienteIdx, dia, valor) {
+  const mes = document.getElementById('mes').value;
+  const ano = document.getElementById('ano').value;
+  const chave = `${ano}_${mes}`;
+  
+  const busca = document.getElementById('busca') ? document.getElementById('busca').value.toLowerCase() : '';
+  const dadosMes = await obterDadosMesAtual();
+  const listaFiltrada = dadosMes[abaAtiva].filter(item => item.nome.toLowerCase().includes(busca));
+  const clienteReal = listaFiltrada[clienteIdx];
+  
+  if (clienteReal) {
+    clienteReal.dias[dia] = valor === '' ? null : parseFloat(valor);
+    await salvarDados(chave);
+    await render();
+    exibirToast();
+  }
+}
+
+async function abrirLancamento() {
+  const dadosMes = await obterDadosMesAtual();
+  const select = document.getElementById('mCliente');
+  if (select && dadosMes) {
+    select.innerHTML = dadosMes[abaAtiva].map(c => `<option value="${c.nome}">${c.nome}</option>`).join('');
+  }
+  const mDia = document.getElementById('mDia');
+  const mQtd = document.getElementById('mQtd');
+  if (mDia) mDia.value = new Date().getDate();
+  if (mQtd) mQtd.value = '';
+  
+  const modalBg = document.getElementById('modalBg');
+  if (modalBg) modalBg.classList.add('active');
+}
+
+function fecharModal(id) {
+  const modal = document.getElementById(id);
+  if (modal) modal.classList.remove('active');
+}
+
+async function salvarLancamento() {
+  const nomeCliente = document.getElementById('mCliente').value;
+  const dia = parseInt(document.getElementById('mDia').value) - 1;
+  const qtd = parseFloat(document.getElementById('mQtd').value);
+
+  if (isNaN(dia) || dia < 0 || dia > 30 || isNaN(qtd)) {
+    alert("Por favor, preencha os campos com valores válidos.");
+    return;
+  }
+
+  const mes = document.getElementById('mes').value;
+  const ano = document.getElementById('ano').value;
+  const chave = `${ano}_${mes}`;
+
+  const dadosMes = await obterDadosMesAtual();
+  const cliente = dadosMes[abaAtiva].find(c => c.nome === nomeCliente);
+  if (cliente) {
+    cliente.dias[dia] = qtd;
+    await salvarDados(chave);
+    await render();
+    fecharModal('modalBg');
+    exibirToast();
+  }
+}
+
+async function adicionarCliente() {
+  const nome = prompt("Nome do novo Cliente / Produto:");
+  if (nome && nome.trim() !== "") {
+    const nomeFormatado = nome.trim().toUpperCase();
+    const dadosMes = await obterDadosMesAtual();
+    
+    if (dadosMes[abaAtiva].some(c => c.nome === nomeFormatado)) {
+      alert("Este cliente já está cadastrado!");
+      return;
+    }
+    
+    dadosMes[abaAtiva].push({ nome: nomeFormatado, dias: new Array(31).fill(null) });
+    dadosMes[abaAtiva].sort((a, b) => a.nome.localeCompare(b.nome));
+    
+    const mes = document.getElementById('mes').value;
+    const ano = document.getElementById('ano').value;
+    const chave = `${ano}_${mes}`;
+    
+    await salvarDados(chave);
+    await render();
+    exibirToast();
+  }
+}
+
+async function abrirResumo() {
+  const mes = parseInt(document.getElementById('mes').value);
+  const ano = parseInt(document.getElementById('ano').value);
+  const dadosMes = await obterDadosMesAtual();
+  
+  const resumoTitulo = document.getElementById('resumoTitulo');
+  if (resumoTitulo) {
+    resumoTitulo.innerText = `📊 Resumo de ${abaAtiva.toUpperCase()} — ${mesesNomes[mes - 1]}/${ano}`;
+  }
+  
+  const ranking = dadosMes[abaAtiva].map(cliente => {
+    const total = cliente.dias.reduce((acc, val) => acc + (parseFloat(val) || 0), 0);
+    return { nome: cliente.nome, total };
+  }).filter(c => c.total > 0);
+
+  ranking.sort((a, b) => b.total - a.total);
+
+  const listaEl = document.getElementById('listaRanking');
+  
+  if (listaEl) {
+    if (ranking.length === 0) {
+      listaEl.innerHTML = '<li style="padding:15px;text-align:center;color:var(--muted)">Nenhum lançamento registrado neste mês.</li>';
+    } else {
+      listaEl.innerHTML = ranking.map((item, pos) => `
+        <li class="ranking-item">
+          <span><strong>#${pos + 1}</strong> ${item.nome}</span>
+          <span class="badge">${item.total.toLocaleString('pt-BR')} unid</span>
+        </li>
+      `).join('');
+    }
+  }
+
+  const modalResumo = document.getElementById('modalResumo');
+  if (modalResumo) modalResumo.classList.add('active');
+}
+
+async function limparMes() {
+  if (confirm("Tem certeza que deseja limpar todos os lançamentos deste mês na aba atual?")) {
+    const mes = document.getElementById('mes').value;
+    const ano = document.getElementById('ano').value;
+    const chave = `${ano}_${mes}`;
+    
+    const dadosMes = await obterDadosMesAtual();
+    dadosMes[abaAtiva].forEach(c => c.dias = new Array(31).fill(null));
+    await salvarDados(chave);
+    await render();
+    exibirToast();
+  }
+}
+
+function exibirToast() {
+  const toast = document.getElementById('toast');
+  if (toast) {
+    toast.classList.add('show');
+    setTimeout(() => toast.classList.remove('show'), 2000);
+  }
+}
+
+// Vincula funções ao objeto global window ANTES da renderização
+window.render = render;
+window.mudarAba = mudarAba;
+window.atualizarValor = atualizarValor;
+window.abrirLancamento = abrirLancamento;
+window.fecharModal = fecharModal;
+window.salvarLancamento = salvarLancamento;
+window.adicionarCliente = adicionarCliente;
+window.abrirResumo = abrirResumo;
+window.limparMes = limparMes;
+window.exibirToast = exibirToast;
+
+window.exportarBackup = function() {
+  const str = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(bancoDados));
+  const anchor = document.createElement('a');
+  anchor.setAttribute("href", str);
+  anchor.setAttribute("download", `backup_producao_completo_${new Date().toISOString().slice(0,10)}.json`);
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+};
+
+window.importarBackup = function(event) {
+  const reader = new FileReader();
+  reader.onload = async function(e) {
+    try {
+      bancoDados = JSON.parse(e.target.result);
+      const mes = document.getElementById('mes').value;
+      const ano = document.getElementById('ano').value;
+      const chave = `${ano}_${mes}`;
+      await salvarDados(chave);
+      await render();
+      alert("Backup completo restaurado com sucesso!");
+    } catch (err) {
+      alert("Erro ao ler arquivo de backup.");
+    }
+  };
+  reader.readAsText(event.target.files[0]);
+};
+
+window.baixarPDF = function() {
+  window.print();
+};
+
+// Executa render() apenas quando o DOM estiver completamente carregado
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', render);
+} else {
+  render();
+}
+</script>
